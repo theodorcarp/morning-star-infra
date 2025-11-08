@@ -1,0 +1,141 @@
+version: "3.9"
+
+services:
+  # Morning Star Core (Gateway/Backend)
+  gateway:
+    build: ../morning-star-core  # Assumes sibling repo; or use image: yourorg/morning-star-core:latest
+    env_file: .env.production
+    environment:
+      - PYTHONPATH=/app
+      - CORS_ORIGINS=https://morningstar.example.com
+      - MTLS_ENABLED=true  # Hardening Phase 1 stub
+    ports:
+      - "8001:8001"  # Internal; expose via Caddy
+    networks:
+      - internal
+    depends_on:
+      - postgres
+    volumes:
+      - ./certs:/etc/certs:ro  # mTLS certs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+
+  # Database (Postgres for audits/recommendations)
+  postgres:
+    image: postgres:16-alpine
+    env_file: .env.production
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # Reverse Proxy (Caddy for HTTPS + Headers)
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+      - edge
+    depends_on:
+      - gateway
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # Metrics (Prometheus for SLOs)
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # Observability (Grafana for FTS Dashboards)
+  grafana:
+    image: grafana/grafana:10.4.1
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana_dashboard_federated_trust.json:/etc/grafana/provisioning/dashboards/trust.json:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin  # Change in .env!
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    networks:
+      - internal
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # Secrets Stub (Vault for Phase 2; dev mode)
+  vault:
+    image: vault:1.17.1
+    cap_add:
+      - IPC_LOCK
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=root
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+
+networks:
+  internal:
+    internal: true
+    driver: bridge
+  edge:
+    external: false
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  grafana_data:
