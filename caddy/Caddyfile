@@ -1,0 +1,16 @@
+{
+  email admin@morningstar.example.com
+}
+
+${PUBLIC_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy /api/* gateway:8001 {
+    header_up X-Forwarded-Proto https
+  }
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer-when-downgrade"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  }
+}
